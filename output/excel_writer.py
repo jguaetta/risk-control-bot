@@ -58,7 +58,6 @@ def create_controls_excel(
     ws_controls.title = "Draft Controls"
 
     draft_headers = [
-        "Risk Event ID", "Localized Risk Event Name", "Localized Risk Event",
         "Control ID", "Control Type", "Control Title", "Control Description",
         "Control Owner", "Control Performer", "Frequency", "Page", "Section",
         "Source Excerpt", "Expected Evidence", "Repository Match", "Protecht ID", "Control Status",
@@ -66,12 +65,8 @@ def create_controls_excel(
     ws_controls.append(draft_headers)
 
     for finding in gap_findings:
-        risk_event_id = finding.get("risk_event_id", "")
-        risk_name = finding.get("risk_name", "")
-        risk_statement = finding.get("risk_statement", "")
         controls_str = finding.get("controls_addressing", "None")
 
-        # Parse the control IDs associated with this risk
         associated_ids = [
             c.strip() for c in controls_str.split(",")
             if c.strip() and c.strip().lower() != "none"
@@ -86,38 +81,26 @@ def create_controls_excel(
             and controls_by_id[cid].get("repository_match_type") != "exact"
         ]
 
-        if doc_ctrl_ids:
-            for ctrl_id in doc_ctrl_ids:
-                ctrl = controls_by_id[ctrl_id]
-                match_type = ctrl.get("repository_match_type", "")
-                protecht_id = ctrl.get("repository_protecht_id", "")
-                match_label = {"exact": "Existing", "partial": "Partial"}.get(match_type, "New")
-                ws_controls.append([
-                    risk_event_id,
-                    risk_name,
-                    risk_statement,
-                    ctrl.get("control_id", ctrl_id),
-                    ctrl.get("control_type", ""),
-                    ctrl.get("title", ""),
-                    ctrl.get("description", ""),
-                    ctrl.get("control_owner", ""),
-                    ctrl.get("control_performer", ""),
-                    ctrl.get("frequency", ""),
-                    str(ctrl.get("page_number", "")),
-                    ctrl.get("section_heading", ""),
-                    ctrl.get("source_excerpt", ""),
-                    ctrl.get("expected_evidence", ""),
-                    match_label,
-                    protecht_id,
-                    "Open",
-                ])
-        elif not associated_ids:
-            # Tier 1 — no controls at all, show placeholder row
+        for ctrl_id in doc_ctrl_ids:
+            ctrl = controls_by_id[ctrl_id]
+            match_type = ctrl.get("repository_match_type", "")
+            protecht_id = ctrl.get("repository_protecht_id", "")
+            match_label = {"exact": "Existing", "partial": "Partial"}.get(match_type, "New")
             ws_controls.append([
-                risk_event_id,
-                risk_name,
-                risk_statement,
-                "", "", "", "", "", "", "", "", "", "", "", "", "",
+                ctrl.get("control_id", ctrl_id),
+                ctrl.get("control_type", ""),
+                ctrl.get("title", ""),
+                ctrl.get("description", ""),
+                ctrl.get("control_owner", ""),
+                ctrl.get("control_performer", ""),
+                ctrl.get("frequency", ""),
+                str(ctrl.get("page_number", "")),
+                ctrl.get("section_heading", ""),
+                ctrl.get("source_excerpt", ""),
+                ctrl.get("expected_evidence", ""),
+                match_label,
+                protecht_id,
+                "Open",
             ])
 
     _style_header_row(ws_controls, len(draft_headers))
