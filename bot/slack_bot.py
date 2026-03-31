@@ -1,5 +1,6 @@
 import os
 import re
+import queue
 import threading
 import requests
 from slack_bolt import App
@@ -19,6 +20,24 @@ from database.db import get_session, Document, Control, GapFinding, RecommendedC
 from output.excel_writer import create_controls_excel
 
 app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
+
+# ---------------------------------------------------------------------------
+# Ingestion queue — processes one document at a time to prevent DB lock
+# conflicts and API rate limit spikes from concurrent ingestions
+# ---------------------------------------------------------------------------
+
+_ingestion_queue = queue.Queue()
+
+
+def _ingestion_worker():
+    while True:
+        task_fn = _ingestion_queue.get()
+        try:
+            task_fn()
+        except Exception as e:
+            print(f"  [queue] Unhandled worker error: {e}", flush=True)
+        finally:
+            _ingestion_queue.task_done()
 
 
 @app.middleware
@@ -298,68 +317,87 @@ def _ingest_document(file_obj, file_bytes, url, filename, user, say, logger, cha
         say("No recipe loaded. Please upload a recipe DOCX first with the word `recipe` in your message.")
         return
 
-    say(f":hourglass_flowing_sand: Got it — analyzing *{filename}*. I'll post the full results when it's ready.")
+    # Download the file immediately while still in the Slack event handler
     try:
         if file_bytes is None:
             file_bytes = _download_slack_file(url)
-
-        parsed = parse_document(file_bytes=file_bytes, filename=filename)
-        controls_data, skipped_sections = extract_controls(recipe.content, parsed)
-
-        # Post skip warnings in real time so teams know immediately
-        if skipped_sections:
-            say(
-                f":warning: *{len(skipped_sections)} section(s) could not be parsed and were skipped:*\n"
-                + "\n".join(f">• {s}" for s in skipped_sections)
-            )
-
-        session = get_session()
-        try:
-            doc = Document(
-                name=filename,
-                content=parsed["full_text"][:50000],
-                uploaded_by=user,
-                recipe_id=recipe.id,
-            )
-            session.add(doc)
-            session.flush()
-
-            for ctrl in controls_data:
-                control = Control(
-                    document_id=doc.id,
-                    control_id=ctrl.get("control_id"),
-                    control_type=ctrl.get("control_type"),
-                    title=ctrl.get("title"),
-                    description=ctrl.get("description"),
-                    risk_mitigated=ctrl.get("risk_mitigated"),
-                    risk_event=ctrl.get("risk_event"),
-                    control_owner=ctrl.get("control_owner"),
-                    control_performer=ctrl.get("control_performer"),
-                    frequency=ctrl.get("frequency"),
-                    page_number=ctrl.get("page_number"),
-                    section_heading=ctrl.get("section_heading"),
-                    source_excerpt=ctrl.get("source_excerpt"),
-                    expected_evidence=ctrl.get("expected_evidence"),
-                )
-                session.add(control)
-
-            doc_id_db = doc.id
-            session.commit()
-        finally:
-            session.close()
-
-        # Run gap analysis in background thread
-        thread = threading.Thread(
-            target=_run_gap_analysis_background,
-            args=(recipe.content, parsed, controls_data, doc_id_db, channel_id, filename),
-            daemon=True,
-        )
-        thread.start()
-
     except Exception as e:
-        import traceback
-        logger.error(traceback.format_exc())
-        say(f"Failed to ingest document: {e}")
+        say(f"Failed to download *{filename}*: {e}")
+        return
+
+    queue_depth = _ingestion_queue.qsize()
+    if queue_depth > 0:
+        say(
+            f":hourglass: *{filename}* has been queued — "
+            f"{queue_depth} ingestion(s) ahead of it. I'll notify you when it starts."
+        )
+    else:
+        say(f":hourglass_flowing_sand: Got it — analyzing *{filename}*. I'll post the full results when it's ready.")
+
+    def _task():
+        try:
+            if queue_depth > 0:
+                app.client.chat_postMessage(
+                    channel=channel_id,
+                    text=f":hourglass_flowing_sand: Now analyzing *{filename}*. I'll post the full results when it's ready."
+                )
+
+            parsed = parse_document(file_bytes=file_bytes, filename=filename)
+            controls_data, skipped_sections = extract_controls(recipe.content, parsed)
+
+            # Post skip warnings in real time
+            if skipped_sections:
+                app.client.chat_postMessage(
+                    channel=channel_id,
+                    text=(
+                        f":warning: *{len(skipped_sections)} section(s) could not be parsed and were skipped:*\n"
+                        + "\n".join(f">• {s}" for s in skipped_sections)
+                    ),
+                )
+
+            session = get_session()
+            try:
+                doc = Document(
+                    name=filename,
+                    content=parsed["full_text"][:50000],
+                    uploaded_by=user,
+                    recipe_id=recipe.id,
+                )
+                session.add(doc)
+                session.flush()
+
+                for ctrl in controls_data:
+                    control = Control(
+                        document_id=doc.id,
+                        control_id=ctrl.get("control_id"),
+                        control_type=ctrl.get("control_type"),
+                        title=ctrl.get("title"),
+                        description=ctrl.get("description"),
+                        risk_mitigated=ctrl.get("risk_mitigated"),
+                        risk_event=ctrl.get("risk_event"),
+                        control_owner=ctrl.get("control_owner"),
+                        control_performer=ctrl.get("control_performer"),
+                        frequency=ctrl.get("frequency"),
+                        page_number=ctrl.get("page_number"),
+                        section_heading=ctrl.get("section_heading"),
+                        source_excerpt=ctrl.get("source_excerpt"),
+                        expected_evidence=ctrl.get("expected_evidence"),
+                    )
+                    session.add(control)
+
+                doc_id_db = doc.id
+                session.commit()
+            finally:
+                session.close()
+
+            _run_gap_analysis_background(recipe.content, parsed, controls_data, doc_id_db, channel_id, filename)
+
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            app.client.chat_postMessage(channel=channel_id, text=f"Failed to ingest *{filename}*: {e}")
+
+    _ingestion_queue.put(_task)
 
 
 def _log_evidence_from_file(control_id_str, file_id, filename, url, user, message_ts, say, logger):
@@ -837,5 +875,8 @@ def start():
     init_db()
     _autoload_recipe()
     _post_startup_audit()
+    worker = threading.Thread(target=_ingestion_worker, daemon=True, name="ingestion-worker")
+    worker.start()
+    print("  [queue] Ingestion worker started.", flush=True)
     handler = SocketModeHandler(app, SLACK_APP_TOKEN)
     handler.start()
