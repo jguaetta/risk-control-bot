@@ -37,3 +37,15 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Generated Excel output files
+Controls - *.xlsx
+*.xlsx
+
+# Recipe DOCX uploads (may contain proprietary methodology)
+recipe/methodology_recipe.docx
+
+# Test files
+test_document.txt
+run_test.py
+test_extraction.py

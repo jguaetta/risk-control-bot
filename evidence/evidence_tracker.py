@@ -93,6 +93,7 @@ def format_control_summary(control: Control) -> str:
         f">Owner: {control.control_owner}\n"
         f">Frequency: {control.frequency}\n"
         f">Risk Mitigated: {control.risk_mitigated}\n"
+        f">Risk Event: {control.risk_event}\n"
         f">Source: Page {control.page_number} | {control.section_heading}\n"
         f">Status: {control.status}\n"
         f">Description: {control.description}\n"

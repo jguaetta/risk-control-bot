@@ -14,4 +14,6 @@ GOOGLE_TOKEN_FILE = os.environ.get("GOOGLE_TOKEN_FILE", "token.json")
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite:///risk_control_bot.db")
 
+SLACK_AUDIT_CHANNEL = os.environ.get("SLACK_AUDIT_CHANNEL", "")
+
 PORT = int(os.environ.get("PORT", 3000))
