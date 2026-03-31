@@ -64,6 +64,8 @@ def create_controls_excel(
     ]
     ws_controls.append(draft_headers)
 
+    seen_ctrl_ids = set()
+
     for finding in gap_findings:
         controls_str = finding.get("controls_addressing", "None")
 
@@ -79,9 +81,11 @@ def create_controls_excel(
             cid for cid in associated_ids
             if cid in controls_by_id
             and controls_by_id[cid].get("repository_match_type") != "exact"
+            and cid not in seen_ctrl_ids
         ]
 
         for ctrl_id in doc_ctrl_ids:
+            seen_ctrl_ids.add(ctrl_id)
             ctrl = controls_by_id[ctrl_id]
             match_type = ctrl.get("repository_match_type", "")
             protecht_id = ctrl.get("repository_protecht_id", "")
