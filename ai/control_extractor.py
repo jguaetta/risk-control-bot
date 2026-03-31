@@ -134,10 +134,28 @@ Return a JSON array of control objects as specified.
         return parsed
     except json.JSONDecodeError:
         if len(pages) <= 1:
-            if _page_attempt < 3:
-                print(f"    Single-page JSON error — retrying (attempt {_page_attempt + 1}/3)...", flush=True)
+            if _page_attempt == 0:
+                # First failure — transient error, retry once as-is
+                print(f"    Single-page JSON error — retrying (attempt 1/3)...", flush=True)
                 time.sleep(5)
-                return _extract_controls_from_chunk(recipe_content, pages, ctrl_offset, _page_attempt + 1)
+                return _extract_controls_from_chunk(recipe_content, pages, ctrl_offset, 1)
+            if _page_attempt == 1:
+                # Second failure — response too large, split the page text in half
+                page = pages[0]
+                text = page.get("text", "")
+                split_pos = text.rfind(" ", 0, len(text) // 2) or len(text) // 2
+                if len(text) > 500 and split_pos > 0:
+                    print(f"    Single-page JSON error — splitting page text and retrying (attempt 2/3)...", flush=True)
+                    page_a = {**page, "text": text[:split_pos]}
+                    page_b = {**page, "text": text[split_pos:]}
+                    left = _extract_controls_from_chunk(recipe_content, [page_a], ctrl_offset)
+                    right = _extract_controls_from_chunk(recipe_content, [page_b], ctrl_offset + len(left))
+                    return left + right
+                # Text too short to split — one more straight retry
+                print(f"    Single-page JSON error — retrying (attempt 2/3)...", flush=True)
+                time.sleep(5)
+                return _extract_controls_from_chunk(recipe_content, pages, ctrl_offset, 2)
+            # Third failure — give up on this page
             section = pages[0].get("section", "") or f"Page {pages[0].get('page', '?')}"
             print(f"    Warning: skipping page after 3 failed attempts — section: {section}", flush=True)
             return [{"_skipped": True, "section": section}]
