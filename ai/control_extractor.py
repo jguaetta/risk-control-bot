@@ -291,9 +291,9 @@ CONTROL_REPOSITORY_MATCH_PROMPT = """You are a risk and controls documentation s
 You will be given an extracted control and a list of candidate controls from an existing repository.
 
 Determine if any candidate describes the same control:
-- EXACT: same mechanism, same purpose, same scope — this is the same control
-- PARTIAL: overlapping purpose but different in scope, method, or owner
-- NONE: no meaningful match
+- EXACT: same mechanism, same purpose, same scope — this is the same control. Be conservative — only mark exact if it is clearly the same control.
+- PARTIAL: the candidate addresses the same risk area or uses a related mechanism, even if the scope, method, frequency, or owner differs. Err on the side of marking partial if there is any meaningful overlap in purpose.
+- NONE: no meaningful overlap in purpose or risk area.
 
 Return ONLY a valid JSON object:
 {
@@ -307,9 +307,9 @@ REPOSITORY_MATCH_PROMPT = """You are a risk and controls documentation specialis
 You will be given a risk statement, a gap description, and a list of candidate controls from an existing control repository.
 
 For each candidate, determine whether it:
-- EXACTLY addresses the gap: the control fully closes the identified gap — same risk, same scope, complete mitigation
-- PARTIALLY addresses the gap: the control is related and covers some aspect but does not fully close it
-- Does NOT match: unrelated or does not address this gap
+- EXACTLY addresses the gap: the control fully closes the identified gap — same risk, same scope, complete mitigation. Be conservative — only mark exact if the candidate clearly and completely closes the gap.
+- PARTIALLY addresses the gap: the candidate addresses the same risk area or closes part of the gap, even if it does not fully mitigate all aspects. Err on the side of marking partial if there is any meaningful overlap — a control that reduces but does not eliminate the risk should be marked partial.
+- Does NOT match: no meaningful overlap with this risk or gap.
 
 Return ONLY a valid JSON object:
 {
@@ -351,7 +351,7 @@ def _has_repository() -> bool:
 
 
 def _find_repository_matches(risk_statement: str, gap_description: str) -> dict:
-    """Pre-filter repository controls by keyword, then use Claude to classify exact/partial matches."""
+    """Pre-filter repository controls by keyword, score by relevance, then use Claude to classify."""
     from database.db import get_session, RepositoryControl
     from sqlalchemy import or_
 
@@ -361,12 +361,19 @@ def _find_repository_matches(risk_statement: str, gap_description: str) -> dict:
 
         if keywords:
             conditions = []
-            for kw in keywords[:8]:
+            for kw in keywords:
                 conditions.append(RepositoryControl.control_name.ilike(f"%{kw}%"))
                 conditions.append(RepositoryControl.control_description.ilike(f"%{kw}%"))
-            candidates = session.query(RepositoryControl).filter(or_(*conditions)).limit(25).all()
+            # Fetch a broad pool then rank by keyword match count in Python
+            raw_candidates = session.query(RepositoryControl).filter(or_(*conditions)).limit(200).all()
+
+            def _score(c):
+                text = f"{c.control_name} {c.control_description}".lower()
+                return sum(1 for kw in keywords if kw in text)
+
+            candidates = sorted(raw_candidates, key=_score, reverse=True)[:50]
         else:
-            candidates = session.query(RepositoryControl).limit(25).all()
+            candidates = session.query(RepositoryControl).limit(50).all()
 
         if not candidates:
             return {"exact_matches": [], "partial_matches": []}
@@ -433,10 +440,16 @@ def match_controls_to_repository(controls: list[dict]) -> list[dict]:
         try:
             if keywords:
                 conditions = []
-                for kw in keywords[:8]:
+                for kw in keywords:
                     conditions.append(RepositoryControl.control_name.ilike(f"%{kw}%"))
                     conditions.append(RepositoryControl.control_description.ilike(f"%{kw}%"))
-                candidates = session.query(RepositoryControl).filter(or_(*conditions)).limit(10).all()
+                raw_candidates = session.query(RepositoryControl).filter(or_(*conditions)).limit(200).all()
+
+                def _score(c):
+                    text = f"{c.control_name} {c.control_description}".lower()
+                    return sum(1 for kw in keywords if kw in text)
+
+                candidates = sorted(raw_candidates, key=_score, reverse=True)[:50]
             else:
                 candidates = []
 

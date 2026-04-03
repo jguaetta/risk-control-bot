@@ -107,6 +107,34 @@ def create_controls_excel(
                 "Open",
             ])
 
+    # Include any extracted controls that weren't linked to a gap finding.
+    # These may still mitigate risks that exist in the broader ecosystem
+    # even if not identified in this document.
+    for ctrl_id, ctrl in controls_by_id.items():
+        if ctrl_id in seen_ctrl_ids:
+            continue
+        if ctrl.get("repository_match_type") == "exact":
+            continue
+        match_type = ctrl.get("repository_match_type", "")
+        protecht_id = ctrl.get("repository_protecht_id", "")
+        match_label = {"exact": "Existing", "partial": "Partial"}.get(match_type, "New")
+        ws_controls.append([
+            ctrl.get("control_id", ctrl_id),
+            ctrl.get("control_type", ""),
+            ctrl.get("title", ""),
+            ctrl.get("description", ""),
+            ctrl.get("control_owner", ""),
+            ctrl.get("control_performer", ""),
+            ctrl.get("frequency", ""),
+            str(ctrl.get("page_number", "")),
+            ctrl.get("section_heading", ""),
+            ctrl.get("source_excerpt", ""),
+            ctrl.get("expected_evidence", ""),
+            match_label,
+            protecht_id,
+            "Open",
+        ])
+
     _style_header_row(ws_controls, len(draft_headers))
     _wrap_rows(ws_controls)
     _auto_width(ws_controls)
@@ -134,11 +162,6 @@ def create_controls_excel(
         2: PatternFill(start_color="FFC000", end_color="FFC000", fill_type="solid"),
         3: PatternFill(start_color="70AD47", end_color="70AD47", fill_type="solid"),
     }
-
-    # Build recommendation lookup by risk_event_id for easy access
-    recs_by_reid = {}
-    for rec in recommendations:
-        recs_by_reid.setdefault(rec.get("risk_event_id", ""), []).append(rec)
 
     for finding in gap_findings:
         tier = finding.get("coverage_tier")
@@ -181,19 +204,6 @@ def create_controls_excel(
                     repo.get("control_type", ""),
                     "",
                 ])
-
-        # Include draft recommendations for this risk
-        for rec in recs_by_reid.get(risk_event_id, []):
-            ctrl_rows.append([
-                "",
-                rec.get("recommendation_id", ""),
-                rec.get("title", ""),
-                rec.get("description", ""),
-                rec.get("control_owner", "TBD"),
-                rec.get("control_performer", "TBD"),
-                rec.get("control_type", ""),
-                rec.get("frequency", "TBD"),
-            ])
 
         # If still no rows, write a single placeholder row
         if not ctrl_rows:
